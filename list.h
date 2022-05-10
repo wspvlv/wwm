@@ -9,7 +9,7 @@
 /* Appends to a list */
 #define listAppend(list,value)				\
 	(list) = _listAppend((List*)(list));	\
-	(list)[listCount(list)] = (value)
+	(list)[listCount(list)-1] = (value)
 /* Deletes a list */
 #define listDelete(list)		(free(listMeta(list)))
 /* Returns the length of the list */
@@ -17,9 +17,9 @@
 /* Returns the size of an element */
 #define listSize(list)			(listMeta(list)->size)
 /* Pointer to metadata of the list */
-#define listMeta(list)			((List*)((void*)(list)-sizeof(List)))
+#define listMeta(list)			((List*)list-1)
 /* Pointer to data (entries) of the list */
-#define listData(list)			((List*)((void*)(list)+sizeof(List)))
+#define listData(list)			((List*)list+1)
 /* Maximal amount of elements */
 #define LIST_MAXELM				(2097151)
 /* Maximal size of an element */
