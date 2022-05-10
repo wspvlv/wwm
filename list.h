@@ -7,15 +7,23 @@
 
 
 /* Appends to a list */
-#define listAppend(list,value)							\
-	(list) = listExpand((list), 1);						\
-	listSet((list), listMeta(list)->count-1, (value))
-#define listDelete(list)		(free(listMeta(list)))	/* Deletes a list */
-#define listCount(list)			(listMeta(list)->count)	/* Returns the length of the list */
-#define listSize(list)			(listMeta(list)->size)	/* Returns the size of an element */
-#define listMeta(list)			((list)-sizeof(List))	/* Pointer to metadata of the list */
-#define LIST_MAXELM				(2097151)				/* Maximal amount of elements */
-#define LIST_MAXSIZ				(4194304)				/* Maximal size of an element */
+#define listAppend(list,value)				\
+	(list) = _listAppend((List*)(list));	\
+	(list)[listCount(list)] = (value)
+/* Deletes a list */
+#define listDelete(list)		(free(listMeta(list)))
+/* Returns the length of the list */
+#define listCount(list)			(listMeta(list)->count)
+/* Returns the size of an element */
+#define listSize(list)			(listMeta(list)->size)
+/* Pointer to metadata of the list */
+#define listMeta(list)			((List*)((void*)(list)-sizeof(List)))
+/* Pointer to data (entries) of the list */
+#define listData(list)			((List*)((void*)(list)+sizeof(List)))
+/* Maximal amount of elements */
+#define LIST_MAXELM				(2097151)
+/* Maximal size of an element */
+#define LIST_MAXSIZ				(4194304)
 
 
 
@@ -39,15 +47,11 @@ typedef struct List {
 
 
 
-/* Uninitializes an element and shifts other elements over the gap */
-extern List* listClear(List* list, const uint32_t index);
-/* Initialize more elements */
-extern List* listExpand(List* list, const uint32_t delta);
-/* Retrives the value of a list element */
-extern List* listGet(List* restrict const list, const uint32_t index);
 /* Initializes a new list*/
-extern List* listNew(const uint32_t count, const uint32_t size);
-/* Writes the value to a list element */
-extern List* listSet(List* restrict const list, const uint32_t index, List* value);
+extern void* listNew(const uint32_t count, const uint32_t size);
+/* Extends the list */
+extern void* _listAppend(List* list);
+
+
 
 #endif
