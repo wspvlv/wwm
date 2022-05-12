@@ -1,10 +1,20 @@
 #include <unistd.h>		/* execl, fork */
 #include <stdio.h>		/* fflush, printf */
 #include <stdint.h>		/* intmax_t */
-#include <stdlib.h>		/* system */
+#include <math.h>		/* fabs */
 #include <X11/keysym.h>	/*  */
 #include <X11/Xlib.h>
 #include "list.h"
+
+
+/**
+ *	0 -- Do not optimize
+ *	1 -- Optimize
+ *	2 -- Optimize with complete disregard for other resources
+ */
+#define WWM_OPTIMIZE_MEMORY 0
+#define WWM_OPTIMIZE_SPEED	1
+#define WWM_OPTIMIZE_SIZE	0
 
 
 
@@ -22,6 +32,7 @@ static Window	root;	/* Root window */
 static Window*	list;	/* List of open windows */
 static List*	meta;	/* Metadata of `list` for quick access */
 static XEvent	event;
+static FILE*	file;
 
 
 static void tile();
@@ -105,16 +116,68 @@ quit:
 	return 0;
 }
 
+/* Square root */
+uint_fast16_t sqrtu32(uint_fast32_t z) {
+	uint_fast16_t x = 1;
+	while (x*x != z)
+		x = (x + z/x) / 2;
+	return x;
+}
+
 /* Tile windows */
 static void tile() {
 	if (meta->count) {
 		const int screen = XDefaultScreen(display);
-		const unsigned int width = XDisplayWidth(display, screen)/meta->count;
-		const unsigned int height = XDisplayHeight(display, screen);
-		/* Resize and */
-		for (uint_fast8_t i = 0; i < meta->count; i++) {
-			XMoveResizeWindow(display, list[i], i*width, 0, width, height);
-			XMapWindow(display, list[i]);
+		const unsigned int swidth = XDisplayWidth(display, screen);
+		const unsigned int sheight = XDisplayHeight(display, screen);
+		/* Resize and map */
+		uint_fast8_t row = 1;
+		uint_fast8_t column;
+		unsigned int width, height;
+		/* Here ratio means ratio of window dimensions */
+		float factor; 				/* 1:1 ratio factor for currect row count */
+		float bestFactor = 1; 		/* best closest to 1:1 ratio factor up until current row count */
+		uint_fast8_t bestRow = 1;	/* Current best row count, which provides closest to 1:1 ratio */
+		for (; row <= meta->count; row++) {
+			column = meta->count / row;
+			width = swidth / column;
+			height = sheight / row;
+			if (width > height) factor = fabs( 1-((float)height/(float)width) );
+			else factor = fabs( 1-((float)width/(float)height) );
+			if (factor < bestFactor) {
+				bestFactor = factor;
+				bestRow = row;
+			}
+		}
+		column = meta->count / bestRow;
+		width = swidth / column;
+		height = sheight / bestRow;
+		for (uint_fast8_t i = 0; i < bestRow; i++) {
+			if (i < bestRow-1)
+				for (uint_fast8_t j = 0; j < column; j++) {
+					const uint_fast8_t index = i*column+j;
+					XMoveResizeWindow(display, list[index], j*width, i*height, width, height);
+					XMapWindow(display, list[index]);
+				}
+			else {
+				const uint_fast8_t columnLR = column + meta->count%bestRow;
+				file = fopen("homo", "w");
+				fprintf(file, "row = %hhu\n", bestRow);
+				fprintf(file, "column = %hhu\n", column);
+				fprintf(file, "columnLR = %hhu\n", columnLR);
+				fprintf(file, "width = %u\n", width);
+				width = swidth / columnLR;
+				fprintf(file, "widthLR = %u\n", width);
+				fprintf(file, "height = %u\n", height);
+				fprintf(file, "i = %hhu\n", i);
+				fflush(file);
+				fclose(file);
+				for (uint_fast8_t j = 0; j < columnLR; j++) {
+					const uint_fast8_t index = i*column+j;
+					XMoveResizeWindow(display, list[index], j*width, i*height, width, height);
+					XMapWindow(display, list[index]);
+				}
+			}
 		}
 	}
 	/* Focus on the last opened window */
