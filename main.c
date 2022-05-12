@@ -18,12 +18,14 @@
 
 
 static Display*	display;
-static Window	root;
-static Window*	list;
+static Window	root;	/* Root window */
+static Window*	list;	/* List of open windows */
+static List*	meta;	/* Metadata of `list` for quick access */
 static XEvent	event;
 
 
 static void tile();
+static uint_fast32_t findWindow(Window window);
 
 
 
@@ -41,6 +43,7 @@ int main() {
 	XSelectInput(display, root, KeyReleaseMask | SubstructureRedirectMask);
 	/* Create a list for active windows */
 	list = listNew(4, sizeof(Window));
+	meta = listMeta(list);
 	if (!list) return RETURN_NO_MEMORY;
 	/* Grab Super key */
 	XGrabKey(display, XKeysymToKeycode(display, XK_Super_L), 0, root, False, GrabModeAsync, GrabModeAsync);
@@ -58,9 +61,9 @@ int main() {
 			case MapRequest:
 				/* Add this window to the list of tiled windows */
 				listAppend(list, event.xmaprequest.window);
-				/* list[listCount(list)] = event.xmaprequest.window;
-				listCount(list)++; */
-				/* Retile windows */
+				meta = listMeta(list);
+				/* list[meta->count] = event.xmaprequest.window;
+				meta->count++; */
 				tile();
 				break;
 			/* User released a button */
@@ -70,7 +73,22 @@ int main() {
 					/* Determine which button was released */
 					KeySym key = XKeycodeToKeysym(display, event.xkey.keycode, 0);
 					switch (key) {
-						case XK_Escape: goto quit;
+						case XK_Escape:
+							int index;		/* Index of list entry */
+							Window focus;
+							/* Here `&index` is used as a dummy pointer */
+							XGetInputFocus(display, &focus, &index);
+							/* Find focus window in the list */
+							index = findWindow(focus);
+							/* If it's not on the list, do nothing */
+							if ((uint_fast32_t)index != (uint_fast32_t)-1) {
+								/* Close the window and retile */
+								listClear(list, index);
+								XKillClient(display, focus);
+								tile();
+							}
+							break;
+						case XK_e: goto quit;
 						case XK_k: run("/bin/konsole"); break;
 					}
 				}
@@ -87,15 +105,26 @@ quit:
 	return 0;
 }
 
+/* Tile windows */
 static void tile() {
-	const uint_fast8_t count = listCount(list);
-	if (count) {
+	if (meta->count) {
 		const int screen = XDefaultScreen(display);
-		const unsigned int width = XDisplayWidth(display, screen)/count;
+		const unsigned int width = XDisplayWidth(display, screen)/meta->count;
 		const unsigned int height = XDisplayHeight(display, screen);
-		for (uint_fast8_t i = 0; i < count; i++) {
+		/* Resize and */
+		for (uint_fast8_t i = 0; i < meta->count; i++) {
 			XMoveResizeWindow(display, list[i], i*width, 0, width, height);
 			XMapWindow(display, list[i]);
 		}
 	}
+	/* Focus on the last opened window */
+	XSetInputFocus(display, list[meta->count-1], RevertToPointerRoot, CurrentTime);
+}
+
+/* Find window in the list */
+static uint_fast32_t findWindow(Window window) {
+	for (uint_fast8_t i = 0; i < meta->count; i++) {
+		if (list[i] == window) return i;
+	}
+	return -1;
 }
