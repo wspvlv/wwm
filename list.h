@@ -12,6 +12,8 @@
 	(list)[listCount(list)-1] = (value)
 /* Deletes a list */
 #define listDelete(list)		(free(listMeta(list)))
+/**/
+#define listClear(list, index)	_listClear((List*)(list), (index))
 /* Returns the length of the list */
 #define listCount(list)			(listMeta(list)->count)
 /* Returns the size of an element */
@@ -48,9 +50,10 @@ typedef struct List {
 
 
 /* Initializes a new list*/
-extern void* listNew(const uint32_t count, const uint32_t size);
+extern void* listNew(const uint_fast32_t count, const uint_fast32_t size);
 /* Extends the list */
 extern void* _listAppend(List* list);
+extern void _listClear(List* list, const uint_fast32_t index);
 
 
 
