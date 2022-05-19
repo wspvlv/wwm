@@ -14,7 +14,7 @@
 /* Deletes a list */
 #define listDelete(list)		(free(listMeta(list)))
 /**/
-#define listClear(list, index)	_listClear((List*)(list), (index))
+#define listClear(list, index)	(list = _listClear((List*)(list), (index)))
 /* Returns the length of the list */
 #define listCount(list)			(listMeta(list)->count)
 /* Returns the size of an element */
@@ -22,7 +22,7 @@
 /* Pointer to metadata of the list */
 #define listMeta(list)			((List*)list-1)
 /* Pointer to data (entries) of the list */
-#define listData(list)			((List*)list+1)
+#define listData(list)			((void*)((List*)list+1))
 /* Maximal amount of elements */
 #define LIST_MAXELM				(2097151)
 /* Maximal size of an element */
@@ -54,7 +54,7 @@ typedef struct List {
 extern void* listNew(const uint_fast32_t count, const uint_fast32_t size);
 /* Extends the list */
 extern void* _listAppend(List* list);
-extern void _listClear(List* list, const uint_fast32_t index);
+extern void* _listClear(List* list, const uint_fast32_t index);
 
 
 
