@@ -1,8 +1,4 @@
 wwm
-.vscode/*
-i3/*
-dwm/*
-dmenu/*
-libX11/*
-xterm/*
-xwm/*
+.vscode
+libX11
+`
