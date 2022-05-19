@@ -1,4 +1,3 @@
 wwm
-.vscode
-libX11
-`
+.vscode/
+libX11/
