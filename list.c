@@ -42,7 +42,7 @@ void* _listAppend(List* list) {
 	return list;
 }
 
-void _listClear(List* list, const uint_fast32_t index) {
+void* _listClear(List* list, const uint_fast32_t index) {
 	/* Check whether thelist list exists */
 	if (list) {
 		/* Make `list` point to the metadata of the list */
@@ -50,9 +50,9 @@ void _listClear(List* list, const uint_fast32_t index) {
 		if (index < list->count) {
 			/* Shift all entries by 1 to remove the entry*/
 			memmove(
-				listData(list) + index*list->size, 
-				listData(list) + (index+1)*list->size, 
-				(list->count-index)*list->size
+				listData(list) + index*list->size,
+				listData(list) + (index+1)*list->size,
+				(list->count-index-1)*list->size
 			);
 			list->count--;
 			/* If less than half of allocated entries are initialized... */
@@ -61,5 +61,7 @@ void _listClear(List* list, const uint_fast32_t index) {
 				list = realloc(list, list->allocated*list->size + sizeof(List));
 			}
 		}
+		list = listData(list);
 	}
+	return list;
 }
