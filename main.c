@@ -104,6 +104,7 @@ typedef struct Settings {
 	Keybinding	left;
 	Keybinding	right;
 	Keybinding	run;
+	Keybinding	term;
 	Keybinding	quit;
 	Keybinding	up;
 #else
@@ -119,9 +120,9 @@ typedef struct Settings {
 	Keybinding 		right;
 /* Third alignment */
 	Keybinding 		run;
+	Keybinding		term;
 	Keybinding 		quit;
 	Keybinding 		up;
-	Keybinding		_padding;
 #endif
 }
 #if WWM_OPTIMIZE_MEMORY == 1
@@ -187,15 +188,16 @@ int main() {
 	uint_fast8_t focus = -1;
 
 	settings = (Settings){
-		.borderActive = 0x00FF00,
-		.borderPassive = 0xFF0000,
+		.borderActive = 0xFFFFFF,
+		.borderPassive = 0x000000,
 		.borderWidth = 1,
 		.mod = Mod4Mask,
 		.close = { .mod = 0, .key = XKeysymToKeycode(display, XK_Escape) },
 		.down = { .mod = 0, .key = XKeysymToKeycode(display, XK_Down) },
 		.left = { .mod = 0, .key = XKeysymToKeycode(display, XK_Left) },
 		.right = { .mod = 0, .key = XKeysymToKeycode(display, XK_Right) },
-		.run = { .mod = 0, .key = XKeysymToKeycode(display, XK_space) },
+		.run = { .mod = 0, .key = 133 },
+		.term = { .mod = 0, .key = XKeysymToKeycode(display, XK_Return) },
 		.quit = { .mod = 0, .key = XKeysymToKeycode(display, XK_e) },
 		.up = { .mod = 0, .key = XKeysymToKeycode(display, XK_Up) }
 	};
@@ -206,8 +208,8 @@ int main() {
 	/* Define event-mask for root */
 	XSelectInput(display, root, KeyReleaseMask | SubstructureRedirectMask | SubstructureNotifyMask | FocusChangeMask);
 	/* Grab Super key */
-	XGrabKey(display, /* XKeysymToKeycode(display, XK_Super_L) */AnyKey, settings.mod, root, True, GrabModeAsync, GrabModeAsync);
-	XGrabKey(display, /* XKeysymToKeycode(display, XK_Super_R) */AnyKey, settings.mod, root, True, GrabModeAsync, GrabModeAsync);
+	XGrabKey(display, AnyKey, settings.mod, root, True, GrabModeAsync, GrabModeAsync);
+	XGrabKey(display, AnyKey, settings.mod, root, True, GrabModeAsync, GrabModeAsync);
 
 
 
@@ -219,14 +221,16 @@ int main() {
 		XNextEvent(display, &event);
 		switch (event.type) {
 
-#			define CHECK_KEYBINDING(KEYBINDING)	(unlikely ( ((event.xkey.state&(KEYBINDING).mod) == (KEYBINDING).mod) && (event.xkey.keycode == (KEYBINDING).key) ) )
+#			define CHECK_KEYBINDING(KEYBINDING)	(unlikely ( ((event.xkey.state&(~settings.mod)) == (KEYBINDING).mod) && (event.xkey.keycode == (KEYBINDING).key) ) )
 			/* A key was released */
-			case KeyRelease:
-#ifndef OLD_CODE
+			case KeyRelease:/* 
+#ifndef OLD_CODE */
 				/* Mod key should be pressed */
-				if (likely((event.xkey.state&settings.mod) == settings.mod)) {
+				if (likely(event.xkey.state&settings.mod)) {
 					/* Open konsole */
 					if (CHECK_KEYBINDING(settings.run))
+						_pid = run("/bin/dmenu_run");
+					if (CHECK_KEYBINDING(settings.term))
 						_pid = run("/bin/konsole");
 					/* Close client */
 					if (CHECK_KEYBINDING(settings.close))
@@ -250,49 +254,6 @@ int main() {
 					/* Quit window manager */
 					if (CHECK_KEYBINDING(settings.quit)) goto quit;
 				}
-#else
-				/* Only handle keybindings when Super key is pressed */
-				if (likely(event.xkey.state == Mod4Mask)) {
-					/* Determine which button was released */
-					KeySym key = XKeycodeToKeysym(display, event.xkey.keycode, 0);
-					switch (key) {
-
-						/* Win+Space = run a terminal emulator */
-						case XK_space: 
-							_pid = run("/bin/konsole");
-						break;
-
-						/* Win+Escape = close client */
-						case XK_Escape:
- 							/* XDestroyWindow(display, client[focus].window); */
-							kill(client[focus].process, SIGTERM);
-						break;
-
-						case XK_Left:
-							if (likely(VALID_FOCUS && focus > 0)) {
-								const Client buf[2] = { client[focus-1], client[focus] };
-								client[focus] = buf[0];
-								client[focus-1] = buf[1];
-								tile();
-								focus--;
-							}
-						break;
-						
-						case XK_Right:
-							if (likely(VALID_FOCUS && focus < listCount(client)-1)) {
-								const Client buf[2] = { client[focus], client[focus+1] };
-								client[focus] = buf[1];
-								client[focus+1] = buf[0];
-								tile();
-								focus++;
-							}
-						break;
-
-						/* Win+E = quit the WM */
-						case XK_e: goto quit;
-					}
-				}
-#endif
 			break;
 
 			/* A process requested to map a window */
@@ -321,7 +282,7 @@ int main() {
 
 			/* When focus changes update focus index */
 			case FocusOut:
-				/* if (event.xfocus.mode == NotifyUngrab && VALID_FOCUS)
+					/* if (event.xfocus.mode == NotifyUngrab && VALID_FOCUS)
 					XSetInputFocus(display, client[focus].window, RevertToParent, CurrentTime); */
 			break;
 
