@@ -5,12 +5,13 @@
 
 
 
-#include <unistd.h>		/* execl, fork */
+#include <math.h>		/* fabs */
+#include <signal.h>
+#include <stdarg.h>
 #include <stdio.h>		/* fflush, printf */
 #include <stdint.h>		/* intmax_t */
-#include <math.h>		/* fabs */
 #include <string.h>
-#include <stdarg.h>
+#include <unistd.h>		/* execl, fork */
 #include <X11/keysym.h>	/*  */
 #include <X11/Xlib.h>
 #include "list.h"
@@ -33,18 +34,18 @@
 
 #define VALID_FOCUS	(focus != (uint_fast8_t)-1)
 
-#if defined(WWM_INLINE_RUN)
-static inline void run(const char* command) {
-	if (fork() == 0) execl(command, command, NULL);
+
+
+/* #define run(command)	({							\
+	const pid_t pid = fork();						\
+	if (pid == 0) execl(command, command, NULL);	\
+	pid;											\
+}) */
+static inline pid_t run(const char* restrict const command) {
+	const pid_t pid = fork();
+	if (pid == 0) execl(command, command, NULL);
+	return pid;
 }
-#elif defined(WWM_FUNC_RUN)
-static void run(const char* command) {
-	if (fork() == 0) execl(command, command, NULL);
-}
-#else	/* Optimal behavior */
-#define run(command)	\
-	if (fork() == 0) execl(command, command, NULL);
-#endif
 
 /* Branch Prediction */
 #ifndef likely
@@ -68,29 +69,81 @@ static void run(const char* command) {
 	XLOG(XDrawString(display, info, gc, x, y, c, strlen(c)));\
 })
 
-#define merge(...) _merge(0,__VA_ARGS__,NULL)
+/* #define merge(...) _merge(0,__VA_ARGS__,NULL)
 #define XLOG(FUNC) ({														\
 	fprintf(file, "@%s@%s@%u: %s\n", __FILE__, __func__, __LINE__, #FUNC);	\
 	fflush(file);	\
 	FUNC;																	\
-})
+}) */
+
+
+
+/* Client type */
+typedef struct Client {
+	uint8_t column;
+	uint8_t row;
+	pid_t process;
+	Window window;
+} Client;
+
+/* Keybinding */
+typedef struct Keybinding {
+	uint_fast8_t mod;	/* Additional modifier keys */
+	KeyCode key;
+} __attribute__((packed)) Keybinding;
+
+/* Settings */
+typedef struct Settings {
+#if WWM_OPTIMIZE_MEMORY ==	1
+	uint32_t 	borderActive:24;
+	uint32_t 	borderPassive:24;
+	uint8_t 	borderWidth;
+	uint8_t 	mod;	/* Should we support keys that are not key masks as modifier keys? */
+	Keybinding	close;
+	Keybinding	down;
+	Keybinding	left;
+	Keybinding	right;
+	Keybinding	run;
+	Keybinding	quit;
+	Keybinding	up;
+#else
+/* First alignment (Two alignments with 64-bit uint_fast32_t's) */
+	uint_fast32_t	borderActive;	/* Color of active (in focus) window's border */
+	uint_fast32_t	borderPassive;	/* Color of other windows' border*/
+	uint_fast8_t	borderWidth;	/* in pixel */
+	uint_fast8_t	mod;			/* Should we support keys that are not key masks as modifier keys? */
+/* Second alignment */
+	Keybinding 		close;
+	Keybinding 		down;
+	Keybinding 		left;
+	Keybinding 		right;
+/* Third alignment */
+	Keybinding 		run;
+	Keybinding 		quit;
+	Keybinding 		up;
+	Keybinding		_padding;
+#endif
+}
+#if WWM_OPTIMIZE_MEMORY == 1
+	__attribute__((packed))
+#endif
+Settings;
 
 
 
 static Display*		display;
-static List*		meta;	/* Metadata of `list` for quick access */
-static Window*		list;	/* List of open windows */
+static Client*		client;
 static int			screen;
 static uint_fast8_t	column;
 static uint_fast8_t	row;
-static FILE*		file;
+static Settings		settings;
+/* static FILE*		file; */
 
 
 
 static void tile();
-static char* itoa(uint_fast32_t n);
-/* static char* merge2(const char* a, const char* b); */
-static char* _merge(const char unused, ...);
+/* static char* itoa(uint_fast32_t n);
+static char* _merge(const char unused, ...); */
 
 
 
@@ -98,165 +151,226 @@ static char* _merge(const char unused, ...);
 #define RETURN_NO_DISPLAY	1
 #define RETURN_NO_MEMORY	2
 int main() {
+	/* sizeof(Settings); */
+
+
 	/********************
 	 *	INITIALIZATION	*
 	 ********************/
-	XEvent		event;
-	Window		root;
-	Window		info;
-	uint_fast8_t focus;	/* Index of the window in focus */
-	file = fopen("homo", "w");
-	/* Display */
-	display = XLOG(XOpenDisplay(NULL));
+	/**
+	 * Initialization of global variables 
+	 */
+	/* Opening display */
+	display = XOpenDisplay(NULL);
 	if (unlikely(display == NULL)) return RETURN_NO_DISPLAY;
-	/* Root Window */
-	root = XLOG(XDefaultRootWindow(display));
-	/* Screen */
-	screen = XLOG(XDefaultScreen(display));
-	/* List & Meta */
-	list = listNew(4, sizeof(Window));
-	if (unlikely(list == NULL)) return RETURN_NO_MEMORY;
-	/* Focus */
-	focus = (uint_fast8_t)-1;
-	/* Receive key release and map events from windows */
-	XLOG(XSelectInput(display, root, KeyReleaseMask | SubstructureRedirectMask | SubstructureNotifyMask | FocusChangeMask));
-	/* Grab Super key */
-	XLOG(XGrabKey(display, XKeysymToKeycode(display, XK_Super_L), 0, root, True, GrabModeAsync, GrabModeAsync));
-	XLOG(XGrabKey(display, XKeysymToKeycode(display, XK_Super_R), 0, root, True, GrabModeAsync, GrabModeAsync));
+	/* Creating a list for clients */
+	client = listNew(4, sizeof(Client));
+	if (unlikely(client == NULL)) return RETURN_NO_MEMORY;
+	/* File */
+	/* file = fopen("homo", "w"); */
 
-
-	/* Info window */
-	info = XLOG(XCreateSimpleWindow(display, root, 0, 0, 250, 250, 10, 0xFFFFFF, 0xFF0000));
+	/**
+	 * Declaration and initialization of local variables 
+	 */
+	/* Event data is retrieved from this variable */
+	XEvent		event;
+	/* Client process ID intermediate storage for a client pending window creation */
+	pid_t		_pid = 0;
+	/* Stores the id of the root window */
+	const Window root = XDefaultRootWindow(display);
+	/* Info window id */
+	/* Window		info = XCreateSimpleWindow(display, root, 0, 0, 250, 250, 10, 0xFFFFFF, 0xFF0000);
 	GC gc = XLOG(XCreateGC(display, info, 0, NULL));
 	XLOG(XSetForeground(display, gc, 0xFFFFFF));
-	XLOG(XSetBackground(display, gc, 0x0));
+	XLOG(XSetBackground(display, gc, 0x0)); */
+	/* Index of the client in focus */
+	uint_fast8_t focus = -1;
+
+	settings = (Settings){
+		.borderActive = 0x00FF00,
+		.borderPassive = 0xFF0000,
+		.borderWidth = 1,
+		.mod = Mod4Mask,
+		.close = { .mod = 0, .key = XKeysymToKeycode(display, XK_Escape) },
+		.down = { .mod = 0, .key = XKeysymToKeycode(display, XK_Down) },
+		.left = { .mod = 0, .key = XKeysymToKeycode(display, XK_Left) },
+		.right = { .mod = 0, .key = XKeysymToKeycode(display, XK_Right) },
+		.run = { .mod = 0, .key = XKeysymToKeycode(display, XK_space) },
+		.quit = { .mod = 0, .key = XKeysymToKeycode(display, XK_e) },
+		.up = { .mod = 0, .key = XKeysymToKeycode(display, XK_Up) }
+	};
+	
+	/**
+	 * Event handling setup
+	 */
+	/* Define event-mask for root */
+	XSelectInput(display, root, KeyReleaseMask | SubstructureRedirectMask | SubstructureNotifyMask | FocusChangeMask);
+	/* Grab Super key */
+	XGrabKey(display, /* XKeysymToKeycode(display, XK_Super_L) */AnyKey, settings.mod, root, True, GrabModeAsync, GrabModeAsync);
+	XGrabKey(display, /* XKeysymToKeycode(display, XK_Super_R) */AnyKey, settings.mod, root, True, GrabModeAsync, GrabModeAsync);
+
 
 
 	/********************
 	 *	PROGRAM LOOP	*
 	 ********************/
 	for (;;) {
-		/* Loop through each event on each iteration, if there are any */
-		XLOG(XNextEvent(display, &event));
-		/* Determine what is the type of current event */
+		/* Loop through all events */
+		XNextEvent(display, &event);
 		switch (event.type) {
-			/* If a program tried to map a window */
-			case MapRequest:
-				fprintf(file, "\tMapRequest\n");
-				if (likely(event.xmaprequest.window != info)) {
-					/* Add this window to the list of tiled windows */
-					listAppend(list, event.xmaprequest.window);
-					meta = listMeta(list);	/* Address is subject to change due to expansion */
-					/* Tile 'em */
-					tile();
-					XLOG(XSelectInput(display, event.xmaprequest.window, FocusChangeMask));
-				}
-				break;
-			/* If a program unmapped a window */
-			case UnmapNotify:
-				break;
-			/* Always know what window is in focus */
-			case FocusIn:
-				fprintf(file, "\tFocusIn\n");
-				/* Acquire index in the list for the window in focus */
-				if (event.xfocus.window != root && event.xfocus.mode != NotifyPointer) {
-						for (focus = 0; focus < meta->count; focus++)
-							if (unlikely(event.xfocus.window == list[focus])) goto found;
-					focus = (uint_fast8_t)-1;
-				}
-found:			
-				if (event.xfocus.window != root && event.xfocus.mode != NotifyPointer) {
-					XLOG(XClearWindow(display, info));
-					XLOG(XMapRaised(display, info));
-					DrawStr(0, 10, merge("root = ", itoa(root)));
-					DrawStr(0, 20, merge("focus = ", itoa(focus)));
-					DrawStr(0, 30, merge("event.xfocus.window = ", itoa(event.xfocus.window)));
-					DrawStr(0, 40, merge("event.xfocus.detail = ", itoa(event.xfocus.detail)));
-					DrawStr(0, 50, merge("list[focus] = ", itoa(list[focus])));
-				}
-				break;
-			/* User released a button */
+
+#			define CHECK_KEYBINDING(KEYBINDING)	(unlikely ( ((event.xkey.state&(KEYBINDING).mod) == (KEYBINDING).mod) && (event.xkey.keycode == (KEYBINDING).key) ) )
+			/* A key was released */
 			case KeyRelease:
-				fprintf(file, "\tKeyRelease\n");
-				/* Only check keys if Super is pressed */
+#ifndef OLD_CODE
+				/* Mod key should be pressed */
+				if (likely((event.xkey.state&settings.mod) == settings.mod)) {
+					/* Open konsole */
+					if (CHECK_KEYBINDING(settings.run))
+						_pid = run("/bin/konsole");
+					/* Close client */
+					if (CHECK_KEYBINDING(settings.close))
+						kill(client[focus].process, SIGTERM);
+					/* Move window left */
+					if (CHECK_KEYBINDING(settings.left) && likely(VALID_FOCUS && focus > 0)) {
+						const Client buf = client[focus];
+						client[focus] = client[focus-1];
+						client[focus-1] = buf;
+						tile();
+						focus--;
+					}
+					/* Move window right */
+					if (CHECK_KEYBINDING(settings.right) && likely(VALID_FOCUS && focus < listCount(client)-1)) {
+						const Client buf = client[focus];
+						client[focus] = client[focus+1];
+						client[focus+1] = buf;
+						tile();
+						focus++;
+					}
+					/* Quit window manager */
+					if (CHECK_KEYBINDING(settings.quit)) goto quit;
+				}
+#else
+				/* Only handle keybindings when Super key is pressed */
 				if (likely(event.xkey.state == Mod4Mask)) {
 					/* Determine which button was released */
-					KeySym key = XLOG(XKeycodeToKeysym(display, event.xkey.keycode, 0));
+					KeySym key = XKeycodeToKeysym(display, event.xkey.keycode, 0);
 					switch (key) {
+
+						/* Win+Space = run a terminal emulator */
+						case XK_space: 
+							_pid = run("/bin/konsole");
+						break;
+
+						/* Win+Escape = close client */
 						case XK_Escape:
-							fprintf(file, "\t\tXK_Escape\n");
-							if (likely(VALID_FOCUS)) {
-								XLOG(XKillClient(display, list[focus]));
-								listClear(list, focus);
-								meta = listMeta(list);
-								tile();
-							}
-							break;
-						case XK_e: 
-							fprintf(file, "\t\tXK_e\n");
-							goto quit;
-						case XK_r: 
-							fprintf(file, "\t\tXK_r\n");
-							run("/bin/dmenu_run");
-							break;
-						case XK_i:
-							fprintf(file, "\t\tXK_i\n");
-							XLOG(XUnmapWindow(display, info));
-							break;
-						case XK_f:
-							fprintf(file, "\t\tXK_f\n");
-							XLOG(XSetInputFocus(display, list[meta->count-1], RevertToNone, CurrentTime));
-							break;
-						case XK_space:
-							fprintf(file, "\t\tXK_space\n");
-							run("/bin/konsole");
-							break;
+ 							/* XDestroyWindow(display, client[focus].window); */
+							kill(client[focus].process, SIGTERM);
+						break;
+
 						case XK_Left:
-							fprintf(file, "\t\tXK_Left\n");
 							if (likely(VALID_FOCUS && focus > 0)) {
-								Window buf[2] = { list[focus-1], list[focus] };
-								list[focus] = buf[0];
-								list[focus-1] = buf[1];
+								const Client buf[2] = { client[focus-1], client[focus] };
+								client[focus] = buf[0];
+								client[focus-1] = buf[1];
 								tile();
+								focus--;
 							}
-							break;
+						break;
+						
 						case XK_Right:
-							fprintf(file, "\t\tXK_Right\n");
-							if (likely(VALID_FOCUS && focus < meta->count-1)) {
-								Window buf[2] = { list[focus], list[focus+1] };
-								list[focus] = buf[1];
-								list[focus+1] = buf[0];
+							if (likely(VALID_FOCUS && focus < listCount(client)-1)) {
+								const Client buf[2] = { client[focus], client[focus+1] };
+								client[focus] = buf[1];
+								client[focus+1] = buf[0];
 								tile();
+								focus++;
 							}
-							break;
+						break;
+
+						/* Win+E = quit the WM */
+						case XK_e: goto quit;
 					}
 				}
-				break;
-			}
+#endif
+			break;
+
+			/* A process requested to map a window */
+			case MapRequest:
+				/* Initialize a client with a process and Window IDs */
+				listAppend(client, ((Client){.window = event.xmaprequest.window, .process = _pid}));
+				/* Let this window detect focus changes */
+				XSelectInput(display, event.xmaprequest.window, FocusChangeMask);
+				XSetWindowBorderWidth(display, event.xmaprequest.window, settings.borderWidth);
+				tile();
+			break;
+
+			/* When focus changes update focus index */
+			case FocusIn:
+				if (event.xfocus.mode != NotifyGrab) {
+					if (event.xfocus.mode == NotifyUngrab && VALID_FOCUS) {
+						XSetInputFocus(display, client[focus].window, RevertToParent, CurrentTime);
+						break;
+					}
+					if (VALID_FOCUS) XSetWindowBorder(display, client[focus].window, settings.borderPassive);
+					XSetWindowBorder(display, event.xfocus.window, settings.borderActive);
+					focus = listFindP(client, event.xfocus.window);
+					focus = (VALID_FOCUS) ? focus : listCount(client)-1;
+				}
+			break;
+
+			/* When focus changes update focus index */
+			case FocusOut:
+				/* if (event.xfocus.mode == NotifyUngrab && VALID_FOCUS)
+					XSetInputFocus(display, client[focus].window, RevertToParent, CurrentTime); */
+			break;
+
+			/* If the window is being destroyed */
+			case DestroyNotify:
+				/* Very likely that a window being deleted is the same as the one in focus */
+				/* But in other case, find the window in client list */
+				if (event.xdestroywindow.window != client[focus].window)
+					focus = listFindP(client, event.xdestroywindow.window);
+				/* Uninitialize the client */
+				if (VALID_FOCUS) {
+					listClear(client, focus);
+					tile();
+				}
+			break;
+
 		}
+	}
+
+
+
+	/****************
+	 *	QUITTING	*
+	 ****************/
 quit:
-	for (uint_fast8_t i = 0; i < meta->count; i++)
-		XLOG(XKillClient(display, list[i]));
-	listDelete(list);
-	XLOG(XCloseDisplay(display));
-	fclose(file);
+	for (uint_fast8_t i = 0; i < listCount(client); i++)
+		kill(client[i].process, SIGTERM);
+	listDelete(client);
+	XCloseDisplay(display);
 	return 0;
 }
 
 /* Tile windows */
 static void tile() {
-	if (meta->count) {
-		const unsigned int swidth = XLOG(XDisplayWidth(display, screen));
-		const unsigned int sheight = XLOG(XDisplayHeight(display, screen));
+	/* The value of `count` is used often here, therefore it makes sense to precompute the value, rather than calculating it's location */
+	uint_fast8_t count = listMeta(client)->count;
+
+	if (count) {
+		const unsigned int swidth = XDisplayWidth(display, screen);
+		const unsigned int sheight = XDisplayHeight(display, screen);
 		/* Resize and map */
 		unsigned int width, height;
-		if (meta->count != 3) {
+		if (count != 3) {
 			/* Here ratio means ratio of window dimensions */
 			float factor; 				/* 1:1 ratio factor for currect row count */
 			float bestFactor = 1; 		/* best closest to 1:1 ratio factor up until current row count */
 			uint_fast8_t bestRow = 1;	/* Current best row count, which provides closest to 1:1 ratio */
-			for (row = 1; row <= meta->count; row++) {
-				column = meta->count / row;
+			for (row = 1; row <= count; row++) {
+				column = count / row;
 				width = swidth / column;
 				height = sheight / row;
 				if (width > height) factor = fabs( 1-((float)height/(float)width) );
@@ -271,42 +385,34 @@ static void tile() {
 		else {
 			row = 2;
 		}
-		column = meta->count / row;
+		column = count / row;
 		width = swidth / column;
 		height = sheight / row;
 		for (uint_fast8_t i = 0; i < row; i++) {
 			if (i < row-1)
 				for (uint_fast8_t j = 0; j < column; j++) {
 					const uint_fast8_t index = i*column+j;
-					XLOG(XMoveResizeWindow(display, list[index], j*width, i*height, width, height));
-					XLOG(XMapWindow(display, list[index]));
+					client[index].row = i;
+					client[index].column = j;
+					XMoveResizeWindow(display, client[index].window, j*width, i*height, width-2*settings.borderWidth, height-2*settings.borderWidth);
+					XMapWindow(display, client[index].window);
 				}
 			else {
-				const uint_fast8_t columnLR = column + meta->count%row;
-/* 				file = fopen("homo", "w");
-				fprintf(file, "row = %hhu\n", bestRow);
-				fprintf(file, "column = %hhu\n", column);
-				fprintf(file, "columnLR = %hhu\n", columnLR);
-				fprintf(file, "width = %u\n", width); */
+				const uint_fast8_t columnLR = column + count%row;
 				width = swidth / columnLR;
-/* 				fprintf(file, "widthLR = %u\n", width);
-				fprintf(file, "height = %u\n", height);
-				fprintf(file, "i = %hhu\n", i);
-				fflush(file);
-				fclose(file); */
 				for (uint_fast8_t j = 0; j < columnLR; j++) {
 					const uint_fast8_t index = i*column+j;
-					XLOG(XMoveResizeWindow(display, list[index], j*width, i*height, width, height));
-					XLOG(XMapWindow(display, list[index]));
+					client[index].row = i;
+					client[index].column = j;
+					XMoveResizeWindow(display, client[index].window, j*width, i*height, width-2*settings.borderWidth, height-2*settings.borderWidth);
+					XMapWindow(display, client[index].window);
 				}
 			}
 		}
-		/* Focus on the last opened window */
-		XLOG(XSetInputFocus(display, list[meta->count-1], RevertToPointerRoot, CurrentTime));
 	}
 }
 
-#include <math.h>
+/* #include <math.h>
 static char* itoa(uint_fast32_t n) {
 	if (likely(n > 0)) {
 		const uint_fast8_t len = (uint_fast8_t)log10f(n);
@@ -319,24 +425,12 @@ static char* itoa(uint_fast32_t n) {
 		return str;
 	}
 	return "0";
-}
-
-/* static char* merge2(const char* a, const char* b) {
-	const size_t la = strlen(a);
-	const size_t lb = strlen(b);
-	char* const str = malloc(la+lb+1);
-	memcpy(str, a, la);
-	memcpy(str+la, b, lb);
-	str[la+lb] = '\0';
-	free(a);
-	free(b);
-	return str;
 } */
 
 /** [Merge strings]
  *
  */
-static char* _merge(const char unused, ...) {
+/* static char* _merge(const char unused, ...) {
 	char** _list = listNew(2, sizeof(char*));
 
 	va_list arg;
@@ -372,3 +466,4 @@ static char* _merge(const char unused, ...) {
 	listDelete(_list);
 	return r;
 }
+ */
