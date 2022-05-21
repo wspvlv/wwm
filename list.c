@@ -43,7 +43,7 @@ void* _listAppend(List* list) {
 }
 
 void* _listClear(List* list, const uint_fast32_t index) {
-	/* Check whether thelist list exists */
+	/* Check whether the list list exists */
 	if (list) {
 		/* Make `list` point to the metadata of the list */
 		list = listMeta(list);
@@ -64,4 +64,15 @@ void* _listClear(List* list, const uint_fast32_t index) {
 		list = listData(list);
 	}
 	return list;
+}
+
+void* _memstr(void* haystack, size_t hsize, char* restrict const needle, const size_t nsize) {
+	void* _haystack = haystack;
+	while ((_haystack = memchr(haystack, *needle, hsize))) {
+		if (memcmp(_haystack,needle,nsize) == 0) return _haystack;
+		_haystack++;
+		hsize -= _haystack-haystack;
+		haystack = _haystack;
+	}
+	return NULL;
 }
