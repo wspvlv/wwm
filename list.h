@@ -8,9 +8,10 @@
 
 
 /* Appends to a list */
-#define listAppend(list,value)				\
+#define listAppend(list,value)	({			\
 	(list) = _listAppend((List*)(list));	\
-	(list)[listCount(list)-1] = (value)
+	(list)[listCount(list)-1] = (value);	\
+})
 /**/
 #define listClear(list, index)	(list = _listClear((List*)(list), (index)))
 /* Returns the length of the list */
@@ -18,7 +19,7 @@
 /* Pointer to data (entries) of the list */
 #define listData(list)			((void*)((List*)list+1))
 /* Deletes a list */
-#define listDelete(list)		(free(listMeta(list)))
+#define listDelete(list)		({ free(listMeta(list)); (list) = NULL; })
 /* Find a value in list */
 #define listFind(list, value) ({	\
 	const void* const ptr = (void*)(memstr((list), listCount(list)*listSize(list), &(value), listSize(list)) - (void*)(list));	\

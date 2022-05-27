@@ -1,0 +1,11 @@
+/* Loop through events */
+	/* If user pressed keys */
+		/* To open menu */
+		/* To open a terminal emulator */
+		/* To close a program */
+		/* To move window left */
+		/* To move window right */
+		/* To quit the WM */
+	/* If a program asked to map a window */
+	/* If focus changed */
+	/* If a program asked to destroy a window */
