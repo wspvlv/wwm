@@ -96,7 +96,8 @@ typedef struct Keybinding {
 typedef struct Settings {
 	uint32_t	borderActive:24;	/* Color of active (in focus) window's border */
 	uint32_t	borderPassive:24;	/* Color of other windows' border*/
-	uint8_t		borderWidth;		/* Border width in pixel */
+	uint8_t		borderWidth;		/* Border width in pixels */
+	uint8_t		gap;				/* Gap width in pixels */
 	uint8_t		mod;				/* Modifier key */
 	char*		term;				/* Terminal emulator command */
 	char*		menu;				/* Menu command */
@@ -149,7 +150,8 @@ int main() {
 	settings = (Settings){
 		.borderActive = 0xFFFFFF,
 		.borderPassive = 0x000000,
-		.borderWidth = 15,
+		.borderWidth = 1,
+		.gap = 8,
 		.mod = XKeysymToKeycode(display, XK_Super_L),
 		.term = "/bin/konsole",
 		.menu = "/bin/dmenu_run",
@@ -373,7 +375,14 @@ static void tile() {
 			if (i < row-1) {
 				for (uint_fast8_t j = 0; j < column; j++) {
 					const uint_fast8_t index = i*column+j;
-					XMoveResizeWindow(display, client[index].window, j*width, i*height, width-2*settings.borderWidth, height-2*settings.borderWidth);
+					XMoveResizeWindow(
+						display, 
+						client[index].window, 
+						j*width + settings.gap, 
+						i*height + settings.gap, 
+						width - 2*(settings.borderWidth+settings.gap), 
+						height - 2*(settings.borderWidth+settings.gap)
+					);
 					XMapWindow(display, client[index].window);
 				}
 			}
@@ -382,7 +391,14 @@ static void tile() {
 				width = swidth / columnLR;
 				for (uint_fast8_t j = 0; j < columnLR; j++) {
 					const uint_fast8_t index = i*column+j;
-					XMoveResizeWindow(display, client[index].window, j*width, i*height, width-2*settings.borderWidth, height-2*settings.borderWidth);
+					XMoveResizeWindow(
+						display, 
+						client[index].window, 
+						j*width + settings.gap, 
+						i*height + settings.gap, 
+						width - 2*(settings.borderWidth+settings.gap), 
+						height - 2*(settings.borderWidth+settings.gap)
+					);
 					XMapWindow(display, client[index].window);
 				}
 			}
