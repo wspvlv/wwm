@@ -32,7 +32,7 @@
 #	define WWM_OPTIMIZE_SIZE 0
 #endif
 
-#define VALID_FOCUS	(focus != (uint_fast8_t)-1)
+#define VALID_FOCUS	(focus < listCount(client))
 
 
 
@@ -69,6 +69,8 @@ static inline pid_t run(const char* restrict const command) {
 	XLOG(XDrawString(display, info, gc, x, y, c, strlen(c)));\
 })
 
+#define CHECK_KEYBINDING(KEYBINDING)	(unlikely ( ((event.xkey.state&(~settings.mod)) == (KEYBINDING).mod) && (event.xkey.keycode == (KEYBINDING).key) ) )
+
 /* #define merge(...) _merge(0,__VA_ARGS__,NULL)
 #define XLOG(FUNC) ({														\
 	fprintf(file, "@%s@%s@%u: %s\n", __FILE__, __func__, __LINE__, #FUNC);	\
@@ -80,8 +82,6 @@ static inline pid_t run(const char* restrict const command) {
 
 /* Client type */
 typedef struct Client {
-	uint8_t column;
-	uint8_t row;
 	pid_t process;
 	Window window;
 } Client;
@@ -94,41 +94,22 @@ typedef struct Keybinding {
 
 /* Settings */
 typedef struct Settings {
-#if WWM_OPTIMIZE_MEMORY ==	1
-	uint32_t 	borderActive:24;
-	uint32_t 	borderPassive:24;
-	uint8_t 	borderWidth;
-	uint8_t 	mod;	/* Should we support keys that are not key masks as modifier keys? */
-	Keybinding	close;
-	Keybinding	down;
-	Keybinding	left;
-	Keybinding	right;
-	Keybinding	run;
-	Keybinding	term;
-	Keybinding	quit;
-	Keybinding	up;
-#else
-/* First alignment (Two alignments with 64-bit uint_fast32_t's) */
-	uint_fast32_t	borderActive;	/* Color of active (in focus) window's border */
-	uint_fast32_t	borderPassive;	/* Color of other windows' border*/
-	uint_fast8_t	borderWidth;	/* in pixel */
-	uint_fast8_t	mod;			/* Should we support keys that are not key masks as modifier keys? */
-/* Second alignment */
-	Keybinding 		close;
-	Keybinding 		down;
-	Keybinding 		left;
-	Keybinding 		right;
-/* Third alignment */
-	Keybinding 		run;
-	Keybinding		term;
-	Keybinding 		quit;
-	Keybinding 		up;
-#endif
-}
-#if WWM_OPTIMIZE_MEMORY == 1
-	__attribute__((packed))
-#endif
-Settings;
+	uint32_t	borderActive:24;	/* Color of active (in focus) window's border */
+	uint32_t	borderPassive:24;	/* Color of other windows' border*/
+	uint8_t		borderWidth;		/* Border width in pixel */
+	uint8_t		mod;				/* Modifier key */
+	char*		term;				/* Terminal emulator command */
+	char*		menu;				/* Menu command */
+	Keybinding	kClose;				/* Close window action keybinding */
+	Keybinding	kDown;				/* Move window down action keybinding */
+	Keybinding	kLeft;				/* Move window left action keybinding */
+	Keybinding	kRight;				/* Move window right action keybinding */
+	Keybinding	kMenu;				/* Menu action keybinding */
+	Keybinding	kTerm;
+
+	Keybinding 	kQuit;
+	Keybinding 	kUp;
+} __attribute__((packed)) Settings;
 
 
 
@@ -152,23 +133,35 @@ static char* _merge(const char unused, ...); */
 #define RETURN_NO_DISPLAY	1
 #define RETURN_NO_MEMORY	2
 int main() {
-	/* sizeof(Settings); */
-
-
-	/********************
-	 *	INITIALIZATION	*
-	 ********************/
+#ifndef REGION_INITIALIZATION
 	/**
 	 * Initialization of global variables 
 	 */
 	/* Opening display */
 	display = XOpenDisplay(NULL);
 	if (unlikely(display == NULL)) return RETURN_NO_DISPLAY;
+#	if XSYNCHRONIZE
+		XSynchronize(display, True);
+#	endif
 	/* Creating a list for clients */
 	client = listNew(4, sizeof(Client));
 	if (unlikely(client == NULL)) return RETURN_NO_MEMORY;
-	/* File */
-	/* file = fopen("homo", "w"); */
+	settings = (Settings){
+		.borderActive = 0xFFFFFF,
+		.borderPassive = 0x000000,
+		.borderWidth = 15,
+		.mod = XKeysymToKeycode(display, XK_Super_L),
+		.term = "/bin/konsole",
+		.menu = "/bin/dmenu_run",
+		.kClose = { .mod = 0, .key = XKeysymToKeycode(display, XK_Escape) },
+		.kDown = { .mod = 0, .key = XKeysymToKeycode(display, XK_Down) },
+		.kLeft = { .mod = 0, .key = XKeysymToKeycode(display, XK_Left) },
+		.kRight = { .mod = 0, .key = XKeysymToKeycode(display, XK_Right) },
+		.kMenu = { .mod = 0, .key = 133 },
+		.kTerm = { .mod = 0, .key = XKeysymToKeycode(display, XK_Return) },
+		.kQuit = { .mod = 0, .key = XKeysymToKeycode(display, XK_e) },
+		.kUp = { .mod = 0, .key = XKeysymToKeycode(display, XK_Up) }
+	};
 
 	/**
 	 * Declaration and initialization of local variables 
@@ -179,81 +172,101 @@ int main() {
 	pid_t		_pid = 0;
 	/* Stores the id of the root window */
 	const Window root = XDefaultRootWindow(display);
-	/* Info window id */
-	/* Window		info = XCreateSimpleWindow(display, root, 0, 0, 250, 250, 10, 0xFFFFFF, 0xFF0000);
-	GC gc = XLOG(XCreateGC(display, info, 0, NULL));
-	XLOG(XSetForeground(display, gc, 0xFFFFFF));
-	XLOG(XSetBackground(display, gc, 0x0)); */
-	/* Index of the client in focus */
 	uint_fast8_t focus = -1;
-
-	settings = (Settings){
-		.borderActive = 0xFFFFFF,
-		.borderPassive = 0x000000,
-		.borderWidth = 1,
-		.mod = Mod4Mask,
-		.close = { .mod = 0, .key = XKeysymToKeycode(display, XK_Escape) },
-		.down = { .mod = 0, .key = XKeysymToKeycode(display, XK_Down) },
-		.left = { .mod = 0, .key = XKeysymToKeycode(display, XK_Left) },
-		.right = { .mod = 0, .key = XKeysymToKeycode(display, XK_Right) },
-		.run = { .mod = 0, .key = 133 },
-		.term = { .mod = 0, .key = XKeysymToKeycode(display, XK_Return) },
-		.quit = { .mod = 0, .key = XKeysymToKeycode(display, XK_e) },
-		.up = { .mod = 0, .key = XKeysymToKeycode(display, XK_Up) }
+	uint_fast8_t _focus = -1;
+	KeyCode	key = 0;
+	
+	struct {
+		uint8_t mod:1;
+		uint8_t modGrub:1;
+	} __attribute__((packed)) state = {
+		.mod = 0,
+		.modGrub = 0
 	};
+
 	
 	/**
 	 * Event handling setup
 	 */
 	/* Define event-mask for root */
-	XSelectInput(display, root, KeyReleaseMask | SubstructureRedirectMask | SubstructureNotifyMask | FocusChangeMask);
+	XSelectInput(display, root, KeyPressMask | KeyReleaseMask | SubstructureRedirectMask | SubstructureNotifyMask | FocusChangeMask);
 	/* Grab Super key */
-	XGrabKey(display, AnyKey, settings.mod, root, True, GrabModeAsync, GrabModeAsync);
-	XGrabKey(display, AnyKey, settings.mod, root, True, GrabModeAsync, GrabModeAsync);
+	XGrabKey(display, settings.mod, 0, root, True, GrabModeAsync, GrabModeAsync);
+#endif
 
-
-
-	/********************
-	 *	PROGRAM LOOP	*
-	 ********************/
+#ifndef REGION_PROGRAM_LOOP
 	for (;;) {
 		/* Loop through all events */
 		XNextEvent(display, &event);
 		switch (event.type) {
-
-#			define CHECK_KEYBINDING(KEYBINDING)	(unlikely ( ((event.xkey.state&(~settings.mod)) == (KEYBINDING).mod) && (event.xkey.keycode == (KEYBINDING).key) ) )
-			/* A key was released */
-			case KeyRelease:/* 
-#ifndef OLD_CODE */
-				/* Mod key should be pressed */
-				if (likely(event.xkey.state&settings.mod)) {
-					/* Open konsole */
-					if (CHECK_KEYBINDING(settings.run))
-						_pid = run("/bin/dmenu_run");
-					if (CHECK_KEYBINDING(settings.term))
-						_pid = run("/bin/konsole");
-					/* Close client */
-					if (CHECK_KEYBINDING(settings.close))
-						kill(client[focus].process, SIGTERM);
-					/* Move window left */
-					if (CHECK_KEYBINDING(settings.left) && likely(VALID_FOCUS && focus > 0)) {
-						const Client buf = client[focus];
-						client[focus] = client[focus-1];
-						client[focus-1] = buf;
-						tile();
-						focus--;
-					}
-					/* Move window right */
-					if (CHECK_KEYBINDING(settings.right) && likely(VALID_FOCUS && focus < listCount(client)-1)) {
-						const Client buf = client[focus];
-						client[focus] = client[focus+1];
-						client[focus+1] = buf;
-						tile();
-						focus++;
-					}
-					/* Quit window manager */
-					if (CHECK_KEYBINDING(settings.quit)) goto quit;
+			case KeyRelease:
+				if (state.mod && event.xkey.keycode == 133) {
+					if (!key) run(settings.menu);
+					key = 0;
+					state.mod = 0;
 				}
+				/* if (event.xkey.state&settings.mod && key == 0 && mod_lock) {
+					if (event.xkey.keycode!=133) key = event.xkey.keycode;
+					else key = key ? key : 255;
+				} */
+				/* else {
+					if (event.xkey.keycode==133) key = 0;
+				} */
+			break;
+
+			case KeyPress:
+				if (state.mod) {
+					if (event.xkey.keycode != 133) {
+						key = event.xkey.keycode;
+
+						if (unlikely(key == settings.kTerm.key))
+							_pid = run(settings.term);
+						
+						if (unlikely(key == settings.kClose.key)) {
+							XUnmapWindow(display, client[focus].window);
+							kill(client[focus].process, SIGTERM);
+							/* listClear(client, focus);
+							XSetInputFocus(display, client[focus-1].window, RevertToPointerRoot, CurrentTime);
+							tile(); */
+						}
+
+						if (unlikely(key == settings.kLeft.key) && focus > 0) {
+							const Client buf = client[focus];
+							client[focus] = client[focus-1];
+							client[focus-=1] = buf;
+							tile();
+							/* focus--; */
+						}
+
+						if (unlikely(key == settings.kRight.key) && focus < listCount(client)-1) {
+							const Client buf = client[focus];
+							client[focus] = client[focus+1];
+							client[focus+=1] = buf;
+							tile();
+							/* focus++; */
+						}
+
+						if (unlikely(key == settings.kUp.key) && focus >= column) {
+							const Client buf = client[focus];
+							client[focus] = client[focus-column];
+							client[focus-=column] = buf;
+							tile();
+						}
+
+						if (unlikely(key == settings.kDown.key) && focus <= listCount(client)-column-1) {
+							const Client buf = client[focus];
+							client[focus] = client[focus+column];
+							client[focus+=column] = buf;
+							tile();
+						}
+
+						if(unlikely(key == settings.kQuit.key))
+							goto quit;
+
+					}
+				}
+				else if (event.xkey.keycode == 133)
+					state.mod = 1;
 			break;
 
 			/* A process requested to map a window */
@@ -264,55 +277,62 @@ int main() {
 				XSelectInput(display, event.xmaprequest.window, FocusChangeMask);
 				XSetWindowBorderWidth(display, event.xmaprequest.window, settings.borderWidth);
 				tile();
+				XSetInputFocus(display, event.xmaprequest.window, RevertToPointerRoot, CurrentTime);
 			break;
 
 			/* When focus changes update focus index */
 			case FocusIn:
-				if (event.xfocus.mode != NotifyGrab) {
-					if (event.xfocus.mode == NotifyUngrab && VALID_FOCUS) {
-						XSetInputFocus(display, client[focus].window, RevertToParent, CurrentTime);
-						break;
+				if (state.modGrub || event.xfocus.mode==NotifyGrab) {
+					if (likely(VALID_FOCUS))
+						XSetInputFocus(display, client[focus].window, RevertToPointerRoot, CurrentTime);
+					state.modGrub = 0;
+				}
+				else {
+					_focus = listFindP(client, event.xfocus.window);
+					if (_focus != (uint_fast8_t)-1) {
+						if (likely(VALID_FOCUS)) 
+							XSetWindowBorder(display, client[focus].window, settings.borderPassive);
+						focus = _focus;
+						XSetWindowBorder(display, client[focus].window, settings.borderActive);
 					}
-					if (VALID_FOCUS) XSetWindowBorder(display, client[focus].window, settings.borderPassive);
-					XSetWindowBorder(display, event.xfocus.window, settings.borderActive);
-					focus = listFindP(client, event.xfocus.window);
-					focus = (VALID_FOCUS) ? focus : listCount(client)-1;
+					if (unlikely(!VALID_FOCUS && focus != (uint_fast8_t)-1)) {
+						focus = listCount(client)-1;
+						XSetWindowBorder(display, client[focus].window, settings.borderActive);
+					}
 				}
 			break;
 
 			/* When focus changes update focus index */
 			case FocusOut:
-					/* if (event.xfocus.mode == NotifyUngrab && VALID_FOCUS)
-					XSetInputFocus(display, client[focus].window, RevertToParent, CurrentTime); */
+				/* if (event.xfocus.mode==NotifyUngrab) state.modGrub = 1; */
 			break;
 
-			/* If the window is being destroyed */
-			case DestroyNotify:
+			case UnmapNotify:
 				/* Very likely that a window being deleted is the same as the one in focus */
 				/* But in other case, find the window in client list */
-				if (event.xdestroywindow.window != client[focus].window)
-					focus = listFindP(client, event.xdestroywindow.window);
+				if (unlikely(event.xdestroywindow.window != client[focus].window))
+					_focus = listFindP(client, event.xdestroywindow.window);
 				/* Uninitialize the client */
-				if (VALID_FOCUS) {
+				if (_focus != (uint_fast8_t)-1) {
+					focus = _focus;
 					listClear(client, focus);
+					XSetInputFocus(display, client[focus-1].window, RevertToPointerRoot, CurrentTime);
 					tile();
 				}
 			break;
-
 		}
 	}
+#endif
 
-
-
-	/****************
-	 *	QUITTING	*
-	 ****************/
+#ifndef REGION_QUIT
 quit:
 	for (uint_fast8_t i = 0; i < listCount(client); i++)
 		kill(client[i].process, SIGTERM);
 	listDelete(client);
 	XCloseDisplay(display);
 	return 0;
+#endif
+
 }
 
 /* Tile windows */
@@ -350,21 +370,18 @@ static void tile() {
 		width = swidth / column;
 		height = sheight / row;
 		for (uint_fast8_t i = 0; i < row; i++) {
-			if (i < row-1)
+			if (i < row-1) {
 				for (uint_fast8_t j = 0; j < column; j++) {
 					const uint_fast8_t index = i*column+j;
-					client[index].row = i;
-					client[index].column = j;
 					XMoveResizeWindow(display, client[index].window, j*width, i*height, width-2*settings.borderWidth, height-2*settings.borderWidth);
 					XMapWindow(display, client[index].window);
 				}
+			}
 			else {
 				const uint_fast8_t columnLR = column + count%row;
 				width = swidth / columnLR;
 				for (uint_fast8_t j = 0; j < columnLR; j++) {
 					const uint_fast8_t index = i*column+j;
-					client[index].row = i;
-					client[index].column = j;
 					XMoveResizeWindow(display, client[index].window, j*width, i*height, width-2*settings.borderWidth, height-2*settings.borderWidth);
 					XMapWindow(display, client[index].window);
 				}
