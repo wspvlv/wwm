@@ -79,7 +79,8 @@ typedef struct Settings {
 	uint32_t	borderPassive:24;	/* Color of other windows' border*/
 	uint8_t		borderWidth;		/* Border width in pixels */
 	uint8_t		gap;				/* Gap width in pixels */
-	uint8_t		mod;				/* Modifier key */
+	KeyCode		mod;				/* Modifier key */
+	uint8_t		mod_mask;			/* Modifier key but as a key mask (e.g. Mod5Mask) */
 	char*		term;				/* Terminal emulator command */
 	char*		menu;				/* Menu command */
 	Keybinding	kClose;				/* Close window action keybinding */
@@ -139,12 +140,19 @@ int main() {
 		.kDown = { .mod = 0, .key = XKeysymToKeycode(display, XK_Down) },
 		.kLeft = { .mod = 0, .key = XKeysymToKeycode(display, XK_Left) },
 		.kRight = { .mod = 0, .key = XKeysymToKeycode(display, XK_Right) },
-		.kMenu = { .mod = 0, .key = 133 },
+		.kMenu = { .mod = 0, .key = XKeysymToKeycode(display, XK_Super_L) },
 		.kTerm = { .mod = 0, .key = XKeysymToKeycode(display, XK_Return) },
 		.kQuit = { .mod = 0, .key = XKeysymToKeycode(display, XK_e) },
 		.kUp = { .mod = 0, .key = XKeysymToKeycode(display, XK_Up) }
 	};
 
+	settings.mod_mask = 
+		(settings.mod == XKeysymToKeycode(display, XK_Shift_L) || settings.mod == XKeysymToKeycode(display, XK_Shift_R)) * ShiftMask +
+		(settings.mod == XKeysymToKeycode(display, XK_Caps_Lock)) * LockMask +
+		(settings.mod == XKeysymToKeycode(display, XK_Control_L) || settings.mod == XKeysymToKeycode(display, XK_Control_R)) * ControlMask +
+		(settings.mod == XKeysymToKeycode(display, XK_Alt_L) || settings.mod == XKeysymToKeycode(display, XK_Alt_R)) * Mod1Mask +
+		(settings.mod == XKeysymToKeycode(display, XK_Super_L) || settings.mod == XKeysymToKeycode(display, XK_Super_R)) * Mod4Mask +
+		(settings.mod == XKeysymToKeycode(display, XK_Num_Lock)) * Mod2Mask;
 	/**
 	 * Declaration and initialization of local variables 
 	 */
@@ -156,7 +164,7 @@ int main() {
 	const Window root = XDefaultRootWindow(display);
 	uint_fast8_t focus = -1;
 	uint_fast8_t _focus = -1;
-	KeyCode	key = 0;
+	Keybinding	key = { .key = 0, .mod = 0 };
 	
 	struct {
 		uint8_t mod:1;
@@ -172,8 +180,10 @@ int main() {
 	 */
 	/* Define event-mask for root */
 	XSelectInput(display, root, KeyPressMask | KeyReleaseMask | SubstructureRedirectMask | SubstructureNotifyMask | FocusChangeMask);
+	/* Ungrab any previous grabs */
+	XUngrabKeyboard(display, CurrentTime);
 	/* Grab Super key */
-	XGrabKey(display, settings.mod, 0, root, True, GrabModeAsync, GrabModeAsync);
+	XGrabKey(display, settings.mod, AnyModifier, root, True, GrabModeAsync, GrabModeAsync);
 #endif
 
 #ifndef REGION_PROGRAM_LOOP
@@ -182,22 +192,31 @@ int main() {
 		XNextEvent(display, &event);
 		switch (event.type) {
 			case KeyRelease:
-				if (state.mod && event.xkey.keycode == 133) {
-					if (!key) run(settings.menu);
-					key = 0;
+				if (state.mod && event.xkey.keycode == settings.mod) {
+					if (key.key == 0) {
+						key.key = settings.mod;
+						goto surpass;
+					}
+surpass_return:
+					key.key = 0;
+					key.mod = 0;
 					state.mod = 0;
 				}
 			break;
 
 			case KeyPress:
 				if (state.mod) {
-					if (event.xkey.keycode != 133) {
-						key = event.xkey.keycode;
+					if (event.xkey.keycode != settings.mod) {
+						key.mod = event.xkey.state & (~settings.mod_mask);
+						key.key = event.xkey.keycode;
+surpass:
+						if (unlikely(key.key == settings.kMenu.key && key.mod == settings.kMenu.mod))
+							run(settings.menu);
 
-						if (unlikely(key == settings.kTerm.key))
+						if (unlikely(key.key == settings.kTerm.key && key.mod == settings.kTerm.mod))
 							_pid = run(settings.term);
 						
-						if (unlikely(key == settings.kClose.key)) {
+						if (unlikely(key.key == settings.kClose.key && key.mod == settings.kClose.mod)) {
 #							ifndef XSYNCHRONIZE
 								XUnmapWindow(display, client[focus].window);
 #							endif
@@ -207,7 +226,7 @@ int main() {
 #							endif
 						}
 
-						if (unlikely(key == settings.kLeft.key) && focus > 0) {
+						if (unlikely(key.key == settings.kLeft.key && key.mod == settings.kLeft.mod && focus > 0)) {
 							const Client buf = client[focus];
 							client[focus] = client[focus-1];
 							client[focus-=1] = buf;
@@ -215,7 +234,7 @@ int main() {
 							/* focus--; */
 						}
 
-						if (unlikely(key == settings.kRight.key) && focus < listCount(client)-1) {
+						if (unlikely(key.key == settings.kRight.key && key.mod == settings.kRight.mod && focus < listCount(client)-1)) {
 							const Client buf = client[focus];
 							client[focus] = client[focus+1];
 							client[focus+=1] = buf;
@@ -223,22 +242,26 @@ int main() {
 							/* focus++; */
 						}
 
-						if (unlikely(key == settings.kUp.key) && focus >= column) {
+						if (unlikely(key.key == settings.kUp.key && key.mod == settings.kUp.mod) && focus >= column) {
 							const Client buf = client[focus];
 							client[focus] = client[focus-column];
 							client[focus-=column] = buf;
 							tile();
 						}
 
-						if (unlikely(key == settings.kDown.key) && focus <= listCount(client)-column-1) {
+						if (unlikely(key.key == settings.kDown.key && key.mod == settings.kDown.mod && focus <= listCount(client)-column-1)) {
 							const Client buf = client[focus];
 							client[focus] = client[focus+column];
 							client[focus+=column] = buf;
 							tile();
 						}
 
-						if(unlikely(key == settings.kQuit.key))
+						if(unlikely(key.key == settings.kQuit.key && key.mod == settings.kQuit.mod))
 							goto quit;
+
+						/* Basically if we surpassed the key and mod checks, jump to where we came from */
+						if(unlikely(key.key == settings.mod))
+							goto surpass_return;
 
 					}
 				}
@@ -293,7 +316,10 @@ int main() {
 				if (_focus != (uint_fast8_t)-1) {
 					focus = _focus;
 					listClear(client, focus);
-					XSetInputFocus(display, client[focus-1].window, RevertToPointerRoot, CurrentTime);
+					if (focus != 0)
+						XSetInputFocus(display, client[focus-1].window, RevertToPointerRoot, CurrentTime);
+					else
+						XSetInputFocus(display, client[focus].window, RevertToPointerRoot, CurrentTime);
 					tile();
 				}
 			break;
