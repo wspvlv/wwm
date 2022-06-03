@@ -1,3 +1,4 @@
 wwm
 .vscode/
 libX11/
+wlib.c
