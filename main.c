@@ -139,7 +139,7 @@ int main() {
 		.kDown = { .mod = 0, .key = XKeysymToKeycode(display, XK_Down) },
 		.kLeft = { .mod = 0, .key = XKeysymToKeycode(display, XK_Left) },
 		.kRight = { .mod = 0, .key = XKeysymToKeycode(display, XK_Right) },
-		.kMenu = { .mod = 0, .key = 133 },
+		.kMenu = { .mod = 0, .key = XKeysymToKeycode(display, XK_Super_L) },
 		.kTerm = { .mod = 0, .key = XKeysymToKeycode(display, XK_Return) },
 		.kQuit = { .mod = 0, .key = XKeysymToKeycode(display, XK_e) },
 		.kUp = { .mod = 0, .key = XKeysymToKeycode(display, XK_Up) }
@@ -182,17 +182,22 @@ int main() {
 		XNextEvent(display, &event);
 		switch (event.type) {
 			case KeyRelease:
-				if (state.mod && event.xkey.keycode == 133) {
-					if (!key) run(settings.menu);
-					key = 0;
+				if (state.mod && event.xkey.keycode == settings.mod) {
+					if (!key) {
+						key = settings.mod;
+						goto supress;
+					}
 					state.mod = 0;
 				}
 			break;
 
 			case KeyPress:
 				if (state.mod) {
-					if (event.xkey.keycode != 133) {
+					if (event.xkey.keycode != settings.mod) {
 						key = event.xkey.keycode;
+supress:
+						if (unlikely(key == settings.kMenu.key))
+							run(settings.menu);
 
 						if (unlikely(key == settings.kTerm.key))
 							_pid = run(settings.term);
