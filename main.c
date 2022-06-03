@@ -36,16 +36,11 @@
 
 
 
-/* #define run(command)	({							\
+#define run(command)	({							\
 	const pid_t pid = fork();						\
 	if (pid == 0) execl(command, command, NULL);	\
 	pid;											\
-}) */
-static inline pid_t run(const char* restrict const command) {
-	const pid_t pid = fork();
-	if (pid == 0) execl(command, command, NULL);
-	return pid;
-}
+})
 
 /* Branch Prediction */
 #ifndef likely
@@ -63,20 +58,6 @@ static inline pid_t run(const char* restrict const command) {
 #		define unlikely(cond)	(cond)
 #	endif
 #endif
-
-#define DrawStr(x, y, str) ({							\
-	const char* c = (str);								\
-	XLOG(XDrawString(display, info, gc, x, y, c, strlen(c)));\
-})
-
-#define CHECK_KEYBINDING(KEYBINDING)	(unlikely ( ((event.xkey.state&(~settings.mod)) == (KEYBINDING).mod) && (event.xkey.keycode == (KEYBINDING).key) ) )
-
-/* #define merge(...) _merge(0,__VA_ARGS__,NULL)
-#define XLOG(FUNC) ({														\
-	fprintf(file, "@%s@%s@%u: %s\n", __FILE__, __func__, __LINE__, #FUNC);	\
-	fflush(file);	\
-	FUNC;																	\
-}) */
 
 
 
@@ -107,7 +88,6 @@ typedef struct Settings {
 	Keybinding	kRight;				/* Move window right action keybinding */
 	Keybinding	kMenu;				/* Menu action keybinding */
 	Keybinding	kTerm;
-
 	Keybinding 	kQuit;
 	Keybinding 	kUp;
 } __attribute__((packed)) Settings;
@@ -207,13 +187,6 @@ int main() {
 					key = 0;
 					state.mod = 0;
 				}
-				/* if (event.xkey.state&settings.mod && key == 0 && mod_lock) {
-					if (event.xkey.keycode!=133) key = event.xkey.keycode;
-					else key = key ? key : 255;
-				} */
-				/* else {
-					if (event.xkey.keycode==133) key = 0;
-				} */
 			break;
 
 			case KeyPress:
@@ -227,9 +200,6 @@ int main() {
 						if (unlikely(key == settings.kClose.key)) {
 							XUnmapWindow(display, client[focus].window);
 							kill(client[focus].process, SIGTERM);
-							/* listClear(client, focus);
-							XSetInputFocus(display, client[focus-1].window, RevertToPointerRoot, CurrentTime);
-							tile(); */
 						}
 
 						if (unlikely(key == settings.kLeft.key) && focus > 0) {
