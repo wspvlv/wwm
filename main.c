@@ -121,7 +121,7 @@ int main() {
 	/* Opening display */
 	display = XOpenDisplay(NULL);
 	if (unlikely(display == NULL)) return RETURN_NO_DISPLAY;
-#	if XSYNCHRONIZE
+#	ifdef XSYNCHRONIZE
 		XSynchronize(display, True);
 #	endif
 	/* Creating a list for clients */
@@ -198,8 +198,13 @@ int main() {
 							_pid = run(settings.term);
 						
 						if (unlikely(key == settings.kClose.key)) {
-							XUnmapWindow(display, client[focus].window);
+#							ifndef XSYNCHRONIZE
+								XUnmapWindow(display, client[focus].window);
+#							endif
 							kill(client[focus].process, SIGTERM);
+#							ifdef XSYNCHRONIZE
+								XUnmapWindow(display, client[focus].window);
+#							endif
 						}
 
 						if (unlikely(key == settings.kLeft.key) && focus > 0) {
