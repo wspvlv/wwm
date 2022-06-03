@@ -265,7 +265,7 @@ surpass:
 
 					}
 				}
-				else if (event.xkey.keycode == 133)
+				else if (event.xkey.keycode == settings.mod)
 					state.mod = 1;
 			break;
 
