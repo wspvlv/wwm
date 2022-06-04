@@ -75,20 +75,26 @@ typedef struct Keybinding {
 
 /* Settings */
 typedef struct Settings {
+	/* Aesthetics */
 	uint32_t	borderActive:24;	/* Color of active (in focus) window's border */
 	uint32_t	borderPassive:24;	/* Color of other windows' border*/
 	uint8_t		borderWidth;		/* Border width in pixels */
 	uint8_t		gap;				/* Gap width in pixels */
-	KeyCode		mod;				/* Modifier key */
-	uint8_t		mod_mask;			/* Modifier key but as a key mask (e.g. Mod5Mask) */
+	/* Behavior */
+	_Bool		loopH:1;			/* Whether looping moving windows round is allowed horizontally */
+	_Bool		loopV:1;			/* Whether looping moving windows round is allowed vertically */
+	/* Commands */
 	char*		term;				/* Terminal emulator command */
 	char*		menu;				/* Menu command */
+	/* Keybindings */
+	KeyCode		mod;				/* Modifier key */
+	uint8_t		mod_mask;			/* Modifier key but as a key mask (e.g. Mod5Mask) */
 	Keybinding	kClose;				/* Close window action keybinding */
 	Keybinding	kDown;				/* Move window down action keybinding */
 	Keybinding	kLeft;				/* Move window left action keybinding */
 	Keybinding	kRight;				/* Move window right action keybinding */
 	Keybinding	kMenu;				/* Menu action keybinding */
-	Keybinding	kTerm;
+	Keybinding	kTerm;				/* Open terminal */
 	Keybinding 	kQuit;
 	Keybinding 	kUp;
 } __attribute__((packed)) Settings;
@@ -128,14 +134,15 @@ int main() {
 	/* Creating a list for clients */
 	client = listNew(4, sizeof(Client));
 	if (unlikely(client == NULL)) return RETURN_NO_MEMORY;
+	/* Configuration value initialization */
 	settings = (Settings){
 		.borderActive = 0xFFFFFF,
 		.borderPassive = 0x000000,
 		.borderWidth = 1,
 		.gap = 8,
-		.mod = XKeysymToKeycode(display, XK_Super_L),
 		.term = "/bin/konsole",
 		.menu = "/bin/dmenu_run",
+		.mod = XKeysymToKeycode(display, XK_Super_L),
 		.kClose = { .mod = 0, .key = XKeysymToKeycode(display, XK_Escape) },
 		.kDown = { .mod = 0, .key = XKeysymToKeycode(display, XK_Down) },
 		.kLeft = { .mod = 0, .key = XKeysymToKeycode(display, XK_Left) },
@@ -145,7 +152,7 @@ int main() {
 		.kQuit = { .mod = 0, .key = XKeysymToKeycode(display, XK_e) },
 		.kUp = { .mod = 0, .key = XKeysymToKeycode(display, XK_Up) }
 	};
-
+	/* Compute key mask from our modifier key (branchless switch basically) */
 	settings.mod_mask = 
 		(settings.mod == XKeysymToKeycode(display, XK_Shift_L) || settings.mod == XKeysymToKeycode(display, XK_Shift_R)) * ShiftMask +
 		(settings.mod == XKeysymToKeycode(display, XK_Caps_Lock)) * LockMask +
@@ -162,8 +169,11 @@ int main() {
 	pid_t		_pid = 0;
 	/* Stores the id of the root window */
 	const Window root = XDefaultRootWindow(display);
+	/* Focus index */
 	uint_fast8_t focus = -1;
+	/* Focus index intermediate storage */
 	uint_fast8_t _focus = -1;
+	/* Intermediate buffer for a currently hold key combination */
 	Keybinding	key = { .key = 0, .mod = 0 };
 	
 	struct {
@@ -191,16 +201,13 @@ int main() {
 		/* Loop through all events */
 		XNextEvent(display, &event);
 		switch (event.type) {
+
 			case KeyRelease:
 				if (state.mod && event.xkey.keycode == settings.mod) {
 					if (key.key == 0) {
 						key.key = settings.mod;
 						goto surpass;
 					}
-surpass_return:
-					key.key = 0;
-					key.mod = 0;
-					state.mod = 0;
 				}
 			break;
 
@@ -210,38 +217,35 @@ surpass_return:
 						key.mod = event.xkey.state & (~settings.mod_mask);
 						key.key = event.xkey.keycode;
 surpass:
+						/* Open menu */
 						if (unlikely(key.key == settings.kMenu.key && key.mod == settings.kMenu.mod))
 							run(settings.menu);
 
+						/* Open terminal */
 						if (unlikely(key.key == settings.kTerm.key && key.mod == settings.kTerm.mod))
 							_pid = run(settings.term);
 						
-						if (unlikely(key.key == settings.kClose.key && key.mod == settings.kClose.mod)) {
-#							ifndef XSYNCHRONIZE
-								XUnmapWindow(display, client[focus].window);
-#							endif
+						/* Close window */
+						if (unlikely(key.key == settings.kClose.key && key.mod == settings.kClose.mod))
 							kill(client[focus].process, SIGTERM);
-#							ifdef XSYNCHRONIZE
-								XUnmapWindow(display, client[focus].window);
-#							endif
-						}
 
+						/* Move window left */
 						if (unlikely(key.key == settings.kLeft.key && key.mod == settings.kLeft.mod && focus > 0)) {
 							const Client buf = client[focus];
 							client[focus] = client[focus-1];
 							client[focus-=1] = buf;
 							tile();
-							/* focus--; */
 						}
 
+						/* Move window right */
 						if (unlikely(key.key == settings.kRight.key && key.mod == settings.kRight.mod && focus < listCount(client)-1)) {
 							const Client buf = client[focus];
 							client[focus] = client[focus+1];
 							client[focus+=1] = buf;
 							tile();
-							/* focus++; */
 						}
 
+						/* Move window up */
 						if (unlikely(key.key == settings.kUp.key && key.mod == settings.kUp.mod) && focus >= column) {
 							const Client buf = client[focus];
 							client[focus] = client[focus-column];
@@ -249,6 +253,7 @@ surpass:
 							tile();
 						}
 
+						/* Move window down */
 						if (unlikely(key.key == settings.kDown.key && key.mod == settings.kDown.mod && focus <= listCount(client)-column-1)) {
 							const Client buf = client[focus];
 							client[focus] = client[focus+column];
@@ -256,12 +261,9 @@ surpass:
 							tile();
 						}
 
+						/* Quit WM */
 						if(unlikely(key.key == settings.kQuit.key && key.mod == settings.kQuit.mod))
 							goto quit;
-
-						/* Basically if we surpassed the key and mod checks, jump to where we came from */
-						if(unlikely(key.key == settings.mod))
-							goto surpass_return;
 
 					}
 				}
@@ -295,7 +297,7 @@ surpass:
 						focus = _focus;
 						XSetWindowBorder(display, client[focus].window, settings.borderActive);
 					}
-					if (unlikely(!VALID_FOCUS && focus != (uint_fast8_t)-1)) {
+					if (unlikely(!VALID_FOCUS && focus != (uint_fast8_t)-1 && listCount(client))) {
 						focus = listCount(client)-1;
 						XSetWindowBorder(display, client[focus].window, settings.borderActive);
 					}
@@ -313,14 +315,13 @@ surpass:
 				if (unlikely(event.xdestroywindow.window != client[focus].window))
 					_focus = listFindP(client, event.xdestroywindow.window);
 				/* Uninitialize the client */
-				if (_focus != (uint_fast8_t)-1) {
-					focus = _focus;
-					listClear(client, focus);
-					if (focus != 0)
-						XSetInputFocus(display, client[focus-1].window, RevertToPointerRoot, CurrentTime);
-					else
-						XSetInputFocus(display, client[focus].window, RevertToPointerRoot, CurrentTime);
-					tile();
+				if (_focus < listCount(client)) {
+					listClear(client, _focus);
+					_focus = likely(_focus!=0) ? _focus-1 : _focus;
+					if (listCount(client)) {
+						XSetInputFocus(display, client[_focus].window, RevertToPointerRoot, CurrentTime);
+						tile();
+					}
 				}
 			break;
 		}
