@@ -81,8 +81,11 @@ typedef struct Settings {
 	uint8_t		borderWidth;		/* Border width in pixels */
 	uint8_t		gap;				/* Gap width in pixels */
 	/* Behavior */
-	_Bool		loopH:1;			/* Whether looping moving windows round is allowed horizontally */
-	_Bool		loopV:1;			/* Whether looping moving windows round is allowed vertically */
+	_Bool		loopH:1;			/* Whether moving windows left from first position on the row or right from the last position will move them to the opposite end of the row */
+	_Bool		loopV:1;			/* Whether moving windows up from first row or down from last row will move them to to last or first row respectively */
+	_Bool		shiftH:1;			/* Whether moving windows left from first position on the row or right from the last position will move them to the opposite end of the row but also shift them one row up or down respectively */
+	_Bool		shiftV:1;			/* Whether moving windows up from first row or down from last row will move them to to last or first row respectively but also shift them one column left or right respectively */
+	/* If loop and shift are both on, shifting will be done generally. However moving windows left or up from the first row and column, or right or down from the last row and column would loop them over */
 	/* Commands */
 	char*		term;				/* Terminal emulator command */
 	char*		menu;				/* Menu command */
@@ -140,6 +143,8 @@ int main() {
 		.borderPassive = 0x000000,
 		.borderWidth = 1,
 		.gap = 8,
+		.shiftH = True,
+		.shiftV = True,
 		.term = "/bin/konsole",
 		.menu = "/bin/dmenu_run",
 		.mod = XKeysymToKeycode(display, XK_Super_L),
@@ -229,36 +234,63 @@ surpass:
 						if (unlikely(key.key == settings.kClose.key && key.mod == settings.kClose.mod))
 							kill(client[focus].process, SIGTERM);
 
+#define winRow(index)		(index/column)
+#define winColumn(index)	(index%column)
+
 						/* Move window left */
 						if (unlikely(key.key == settings.kLeft.key && key.mod == settings.kLeft.mod && focus > 0)) {
-							const Client buf = client[focus];
-							client[focus] = client[focus-1];
-							client[focus-=1] = buf;
-							tile();
+							if (likely(settings.shiftH || winColumn(focus) != 0)) {
+								const Client buf = client[focus];
+								client[focus] = client[focus-1];
+								client[focus-=1] = buf;
+								tile();
+							}
 						}
 
 						/* Move window right */
 						if (unlikely(key.key == settings.kRight.key && key.mod == settings.kRight.mod && focus < listCount(client)-1)) {
-							const Client buf = client[focus];
-							client[focus] = client[focus+1];
-							client[focus+=1] = buf;
-							tile();
+							if (likely(settings.shiftH || (winRow(focus) != row-1 ? winColumn(focus) != column-1 : focus != listCount(client)-1))) {
+								const Client buf = client[focus];
+								client[focus] = client[focus+1];
+								client[focus+=1] = buf;
+								tile();
+							}
 						}
 
 						/* Move window up */
-						if (unlikely(key.key == settings.kUp.key && key.mod == settings.kUp.mod) && focus >= column) {
+						if (unlikely(key.key == settings.kUp.key && key.mod == settings.kUp.mod)) {
 							const Client buf = client[focus];
-							client[focus] = client[focus-column];
-							client[focus-=column] = buf;
-							tile();
+							if (focus < column) {
+								if (settings.shiftV && winColumn(focus) > 0) {
+									const uint_fast8_t x = column*(row-1)+(winColumn(focus)-1);
+									client[focus] = client[x];
+									client[focus=x] = buf;
+									tile();
+								}
+							}
+							else {
+								client[focus] = client[focus-column];
+								client[focus-=column] = buf;
+								tile();
+							}
 						}
 
 						/* Move window down */
-						if (unlikely(key.key == settings.kDown.key && key.mod == settings.kDown.mod && focus <= listCount(client)-column-1)) {
+						if (unlikely(key.key == settings.kDown.key && key.mod == settings.kDown.mod)) {
 							const Client buf = client[focus];
-							client[focus] = client[focus+column];
-							client[focus+=column] = buf;
-							tile();
+							if (focus > listCount(client)-column) {
+								if (settings.shiftV && winColumn(focus) < column-1) {
+									const uint_fast8_t x = winColumn(focus)+1;
+									client[focus] = client[x];
+									client[focus=x] = buf;
+									tile();
+								}
+							}
+							else {
+								client[focus] = client[focus+column];
+								client[focus+=column] = buf;
+								tile();
+							}
 						}
 
 						/* Quit WM */
