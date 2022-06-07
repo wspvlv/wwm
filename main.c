@@ -63,8 +63,10 @@
 
 /* Client type */
 typedef struct Client {
-	pid_t process;
-	Window window;
+	pid_t	process;
+	Window	window;
+	char*	name;
+	size_t	nameLen;
 } Client;
 
 /* Keybinding */
@@ -80,6 +82,7 @@ typedef struct Settings {
 	uint32_t	borderPassive:24;	/* Color of other windows' border*/
 	uint8_t		borderWidth;		/* Border width in pixels */
 	uint8_t		gap;				/* Gap width in pixels */
+	uint8_t		barWidth;			/* Window bar width*/
 	/* Behavior */
 	_Bool		loopH:1;			/* Whether moving windows left from first position on the row or right from the last position will move them to the opposite end of the row */
 	_Bool		loopV:1;			/* Whether moving windows up from first row or down from last row will move them to to last or first row respectively */
@@ -104,12 +107,17 @@ typedef struct Settings {
 
 
 
-static Display*		display;
 static Client*		client;
-static int			screen;
 static uint_fast8_t	column;
+static Display*		display;
+static GC			gcPassive;
+static GC			gcActive;
+static Window		root;
 static uint_fast8_t	row;
+static int			screen;
 static Settings		settings;
+static unsigned int swidth;
+static unsigned int sheight;
 /* static FILE*		file; */
 
 
@@ -137,14 +145,25 @@ int main() {
 	/* Creating a list for clients */
 	client = listNew(4, sizeof(Client));
 	if (unlikely(client == NULL)) return RETURN_NO_MEMORY;
+	/* Screen width and height */
+	swidth = XDisplayWidth(display, screen);
+	sheight = XDisplayHeight(display, screen);
+	/* Stores the id of the root window */
+	root = XDefaultRootWindow(display);
+	/* GCs */
+	gcActive = XCreateGC(display, root, 0, NULL);
+	XSetForeground(display, gcActive, 0xFFFFFF);
+	gcPassive = XCreateGC(display, root, 0, NULL);
+	XSetForeground(display, gcPassive, 0x000000);
 	/* Configuration value initialization */
 	settings = (Settings){
 		.borderActive = 0xFFFFFF,
-		.borderPassive = 0x000000,
-		.borderWidth = 1,
+		.borderPassive = 0x800080,
+		.borderWidth = 4,
+		.barWidth = 16,
 		.gap = 8,
-		.shiftH = True,
-		.shiftV = True,
+		.shiftH = False,
+		.shiftV = False,
 		.term = "/bin/konsole",
 		.menu = "/bin/dmenu_run",
 		.mod = XKeysymToKeycode(display, XK_Super_L),
@@ -172,14 +191,14 @@ int main() {
 	XEvent		event;
 	/* Client process ID intermediate storage for a client pending window creation */
 	pid_t		_pid = 0;
-	/* Stores the id of the root window */
-	const Window root = XDefaultRootWindow(display);
 	/* Focus index */
 	uint_fast8_t focus = -1;
 	/* Focus index intermediate storage */
 	uint_fast8_t _focus = -1;
 	/* Intermediate buffer for a currently hold key combination */
 	Keybinding	key = { .key = 0, .mod = 0 };
+
+	GC gc = XCreateGC(display, root, 0, NULL);
 	
 	struct {
 		uint8_t mod:1;
@@ -200,6 +219,9 @@ int main() {
 	/* Grab Super key */
 	XGrabKey(display, settings.mod, AnyModifier, root, True, GrabModeAsync, GrabModeAsync);
 #endif
+
+	XSetForeground(display, gc, 0x80FF80);
+	XFillRectangle(display, root, gc, 0, 0, swidth, settings.barWidth);
 
 #ifndef REGION_PROGRAM_LOOP
 	for (;;) {
@@ -306,7 +328,13 @@ surpass:
 			/* A process requested to map a window */
 			case MapRequest:
 				/* Initialize a client with a process and Window IDs */
-				listAppend(client, ((Client){.window = event.xmaprequest.window, .process = _pid}));
+				listAppend(client, ((Client){
+					.window = event.xmaprequest.window, 
+					.process = _pid,
+				}));
+				XFetchName(display, client[listCount(client)-1].window,
+				&client[listCount(client)-1].name);
+				client[listCount(client)-1].nameLen = strlen(client[listCount(client)-1].name);
 				/* Let this window detect focus changes */
 				XSelectInput(display, event.xmaprequest.window, FocusChangeMask);
 				XSetWindowBorderWidth(display, event.xmaprequest.window, settings.borderWidth);
@@ -324,16 +352,24 @@ surpass:
 				else {
 					_focus = listFindP(client, event.xfocus.window);
 					if (_focus != (uint_fast8_t)-1) {
-						if (likely(VALID_FOCUS)) 
+						if (likely(VALID_FOCUS)) {
 							XSetWindowBorder(display, client[focus].window, settings.borderPassive);
+							XFillRectangle(display, root, gcPassive, swidth/listCount(client)*focus, 0, swidth/listCount(client), settings.barWidth);
+							XDrawString(display, root, gcActive, swidth/listCount(client)*focus, 8, client[focus].name, client[focus].nameLen);
+						}
 						focus = _focus;
-						XSetWindowBorder(display, client[focus].window, settings.borderActive);
+						goto highlight;
 					}
 					if (unlikely(!VALID_FOCUS && focus != (uint_fast8_t)-1 && listCount(client))) {
 						focus = listCount(client)-1;
-						XSetWindowBorder(display, client[focus].window, settings.borderActive);
+						goto highlight;
 					}
 				}
+			break;
+highlight:
+			XSetWindowBorder(display, client[focus].window, settings.borderActive);
+			XFillRectangle(display, root, gcActive, swidth/listCount(client)*focus, 0, swidth/listCount(client), settings.barWidth);
+			XDrawString(display, root, gcPassive, swidth/listCount(client)*focus, 8, client[focus].name, client[focus].nameLen);
 			break;
 
 			/* When focus changes update focus index */
@@ -362,8 +398,10 @@ surpass:
 
 #ifndef REGION_QUIT
 quit:
-	for (uint_fast8_t i = 0; i < listCount(client); i++)
+	for (uint_fast8_t i = 0; i < listCount(client); i++) {
 		kill(client[i].process, SIGTERM);
+		XFree(client[i].name);
+	}
 	listDelete(client);
 	XCloseDisplay(display);
 	return 0;
@@ -377,8 +415,6 @@ static void tile() {
 	uint_fast8_t count = listMeta(client)->count;
 
 	if (count) {
-		const unsigned int swidth = XDisplayWidth(display, screen);
-		const unsigned int sheight = XDisplayHeight(display, screen);
 		/* Resize and map */
 		unsigned int width, height;
 		if (count != 3) {
@@ -413,11 +449,13 @@ static void tile() {
 						display, 
 						client[index].window, 
 						j*width + settings.gap, 
-						i*height + settings.gap, 
+						i*height + settings.gap + (i==0)*settings.barWidth, 
 						width - 2*(settings.borderWidth+settings.gap), 
-						height - 2*(settings.borderWidth+settings.gap)
+						height - 2*(settings.borderWidth+settings.gap) - (i==0)*settings.barWidth
 					);
 					XMapWindow(display, client[index].window);
+					XFillRectangle(display, root, gcPassive, swidth/count*index, 0, swidth/count, settings.barWidth);
+					XDrawString(display, root, gcActive, swidth/count*index, 0, client[index].name, client[index].nameLen);
 				}
 			}
 			else {
@@ -429,69 +467,15 @@ static void tile() {
 						display, 
 						client[index].window, 
 						j*width + settings.gap, 
-						i*height + settings.gap, 
+						i*height + settings.gap + (i==0)*settings.barWidth, 
 						width - 2*(settings.borderWidth+settings.gap), 
-						height - 2*(settings.borderWidth+settings.gap)
+						height - 2*(settings.borderWidth+settings.gap) - (i==0)*settings.barWidth
 					);
 					XMapWindow(display, client[index].window);
+					XFillRectangle(display, root, gcPassive, swidth/count*index, 0, swidth/count, settings.barWidth);
+					XDrawString(display, root, gcActive, swidth/count*index, 0, client[index].name, client[index].nameLen);
 				}
 			}
 		}
 	}
 }
-
-/* #include <math.h>
-static char* itoa(uint_fast32_t n) {
-	if (likely(n > 0)) {
-		const uint_fast8_t len = (uint_fast8_t)log10f(n);
-		char* const str = malloc(len+2);
-		for (uint_fast8_t i = len; n > 0; i--) {
-			str[i] = n%10 + '0';
-			n /= 10;
-		}
-		str[len+1] = '\0';
-		return str;
-	}
-	return "0";
-} */
-
-/** [Merge strings]
- *
- */
-/* static char* _merge(const char unused, ...) {
-	char** _list = listNew(2, sizeof(char*));
-
-	va_list arg;
-	va_start(arg, unused);
-
-	char* str = va_arg(arg, char*);
-	while (str != NULL) {
-		listAppend(_list, str);
-		str = va_arg(arg, char*);
-	}
-
-	va_end(arg);
-
-	uint_fast8_t count = listCount(_list);
-	size_t len[count];
-	size_t lensum = 0;
-	char* r;
-
-	for (uint_fast8_t i = 0; i < count; i++) {
-		lensum += (len[i] = strlen(_list[i]));
-	}
-	
-	r = malloc(lensum+1);
-
-	uint_fast8_t i;
-	uint_fast16_t o;
-	for (i = 0, o = 0; i < count; i++) {
-		memcpy(r+o, _list[i], len[i]);
-		o += len[i];
-	}
-
-	r[lensum] = '\0';
-	listDelete(_list);
-	return r;
-}
- */
